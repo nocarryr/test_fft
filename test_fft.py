@@ -423,6 +423,13 @@ class SampleProcessor:
         self._fir = None
         self._phasor = None
 
+    @classmethod
+    def init_and_process(cls, sample_rate: float, samples: SamplesT, stateful_index: int) -> int:
+        obj = cls(sample_rate)
+        obj.stateful_index = stateful_index
+        obj.process(samples)
+        return obj.stateful_index
+
     @property
     def time_array(self) -> FloatArray:
         t = self._time_array
@@ -605,25 +612,27 @@ async def run_main(chunk_size: int):
     processor = SampleProcessor(reader.sample_rate)
     buffer = SampleBuffer(maxsize=processor.num_samples_to_process * 3)
     reader.buffer = buffer
+    loop = asyncio.get_running_loop()
 
     async def process_loop():
-        while True:
-            await processor.process_from_buffer(buffer)
-
-    process_task = asyncio.create_task(process_loop())
-    try:
-        async with reader:
-            await reader.open_stream()
+        with concurrent.futures.ProcessPoolExecutor() as pool:
             while True:
-                await asyncio.sleep(1)
-                print(f'{buffer.qsize()=}')
+                start_ts = time.monotonic()
+                samples = await buffer.get(processor.num_samples_to_process)
+                result = await loop.run_in_executor(
+                    pool,
+                    SampleProcessor.init_and_process,
+                    reader.sample_rate,
+                    samples,
+                    processor.stateful_index,
+                )
+                processor.stateful_index = result
+                elapsed = time.monotonic() - start_ts
+                print(f'{buffer.qsize()=}\t{elapsed=}')
 
-    finally:
-        process_task.cancel()
-        try:
-            await process_task
-        except asyncio.CancelledError:
-            pass
+    async with reader:
+        await reader.open_stream()
+        await process_loop()
 
 
 # NOTE: This only calls main() above ONLY when the script is being executed
