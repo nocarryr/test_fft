@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 
 class SampleProcessor:
     threshold: float = 0.9
-    freq_offset: float = -43.8e4 #Hz
     beep_duration: float = 0.017 # seconds
 
     stateful_index: int
@@ -30,6 +29,19 @@ class SampleProcessor:
 
     @property
     def num_samples_to_process(self): return self.config.num_samples_to_process
+
+    @property
+    def carrier_freq(self):
+        """Center frequency of the carrier wave to process (in Hz)"""
+        return self.config.carrier_freq
+
+    @property
+    def freq_offset(self) -> float:
+        """The offset (difference) between the sdr's center frequency and
+        the :attr:`carrier_freq`
+        """
+        fc = self.config.sample_config.center_freq
+        return fc - self.carrier_freq
 
     @property
     def time_array(self) -> FloatArray:
