@@ -9,33 +9,24 @@ import rtlsdr
 RtlSdr: TypeAlias = rtlsdr.rtlsdraio.RtlSdrAio
 
 
-from common import SamplesT
+from common import SamplesT, SampleConfig, ProcessConfig
 from sample_processor import SampleProcessor
 
 
 class SampleReader:
-    sample_rate: float = 2.4e6
-    center_freq: float = 160270968
-
-    gain: float|str = 44.5
-    """gain in dB"""
-
-    num_samples: int = 16384
-    """Number of samples to read in each iteration"""
-
     sdr: RtlSdr|None = None
     """RtlSdr instance"""
 
     aio_qsize: int = 1000
 
+    sample_config: SampleConfig
+
     def __init__(
         self,
-        sample_rate: float = 2.4e6,
-        num_samples: int = 16384,
+        sample_config: SampleConfig,
         buffer: SampleBuffer|None = None
     ):
-        self.sample_rate = sample_rate
-        self.num_samples = num_samples
+        self.sample_config = sample_config
         self._buffer = buffer
         self._running_sync = False
         self._running_async = False
@@ -47,6 +38,19 @@ class SampleReader:
         self._callback_futures: set[concurrent.futures.Future] = set()
         self._wrapped_futures: set[asyncio.Future] = set()
         self._cleanup_task: asyncio.Task|None = None
+
+    @property
+    def sample_rate(self): return self.sample_config.sample_rate
+
+    @property
+    def center_freq(self): return self.sample_config.center_freq
+
+    @property
+    def num_samples(self): return self.sample_config.read_size
+
+    @property
+    def gain(self): return self.sample_config.gain
+
 
     @property
     def gain_values_db(self) -> list[float]:
@@ -203,11 +207,6 @@ class SampleReader:
         sdr.sample_rate = self.sample_rate
         sdr.center_freq = self.center_freq
         sdr.gain = self.gain
-
-        # Now we should read the *actual* values back from the device
-        self.sample_rate = sdr.sample_rate
-        self.center_freq = sdr.center_freq
-        self.gain = sdr.gain
 
         # NOTE: Just for debug purposes. This might help with your gain issue
         print(f'{sdr.sample_rate=}, {sdr.center_freq=}, {sdr.gain=}')
@@ -423,7 +422,7 @@ def main():
         '-c', '--chunk-size',
         dest='chunk_size',
         type=int,
-        default=SampleReader.num_samples,
+        default=SampleConfig().read_size,
         help='Chunk size for sdr.read_samples',
     )
     args = p.parse_args()
@@ -443,8 +442,9 @@ async def run_readonly(outfile: str, chunk_size: int, max_samples: int):
     nrows = max_samples // chunk_size
     if nrows * chunk_size < max_samples:
         nrows += 1
+    sample_config = SampleConfig(read_size=chunk_size)
     samples = np.zeros((nrows, chunk_size), dtype=np.complex128)
-    reader = SampleReader(num_samples=chunk_size)
+    reader = SampleReader(sample_config=sample_config)
 
     async with reader:
         await reader.open_stream()
@@ -464,9 +464,11 @@ async def run_readonly(outfile: str, chunk_size: int, max_samples: int):
 
 
 async def run_main(chunk_size: int):
-    reader = SampleReader(num_samples=chunk_size)
-    processor = SampleProcessor(reader.sample_rate)
-    buffer = SampleBuffer(maxsize=processor.num_samples_to_process * 3)
+    sample_config = SampleConfig(read_size=chunk_size)
+    process_config = ProcessConfig(sample_config=sample_config)
+    reader = SampleReader(sample_config=sample_config)
+    processor = SampleProcessor(config=process_config)
+    buffer = SampleBuffer(maxsize=process_config.num_samples_to_process * 3)
     reader.buffer = buffer
 
     async with reader:
