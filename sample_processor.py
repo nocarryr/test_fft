@@ -58,13 +58,6 @@ class SampleProcessor:
         # this makes sure there's at least 1 full chunk within each beep
         return int(self.beep_duration * self.sample_rate / 2)
 
-    async def process_from_buffer(self, buffer: SampleBuffer) -> SamplesT:
-        """Wait for enough samples on the buffer, then process them
-        """
-        samples = await buffer.get(self.num_samples_to_process)
-        await asyncio.to_thread(self.process, samples)
-        return samples
-
     def process(self, samples: SamplesT):
         # fft_size = self.fft_size
         # f = np.linspace(self.sample_rate/-2, self.sample_rate/2, fft_size)
