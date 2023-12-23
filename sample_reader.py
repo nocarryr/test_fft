@@ -284,13 +284,14 @@ class SampleBuffer:
     """
 
     maxsize: int
-    """The maximum length for the buffer. If less than or equal to zero, the
-    buffer length is infinite
-    """
+    """Maximum size of the buffer. Must be greater than zero"""
 
-    def __init__(self, maxsize: int = 0) -> None:
+    def __init__(self, maxsize: int) -> None:
+        assert maxsize > 0
         self.maxsize = maxsize
-        self._samples: SamplesT = np.zeros(0, dtype=np.complex128)
+        self._samples: SamplesT = np.zeros(self.maxsize, dtype=np.complex128)
+        self._num_buffered = 0
+        self._write_ix, self._read_ix = 0, 0
         self._lock: asyncio.Lock = asyncio.Lock()
         self._notify_w = asyncio.Condition(self._lock)
         self._notify_r = asyncio.Condition(self._lock)
@@ -317,12 +318,12 @@ class SampleBuffer:
         """
 
         async with self._lock:
-            new_size = len(self) + samples.size
-            if self.maxsize > 0 and new_size > self.maxsize:
+            sample_size = samples.size
+            def can_write():
+                return len(self) < self.maxsize - sample_size
+            if not can_write():
                 if not block:
                     raise asyncio.QueueFull()
-                def can_write():
-                    return new_size <= self.maxsize
                 if timeout is not None:
                     try:
                         async with asyncio.timeout(timeout):
@@ -331,7 +332,11 @@ class SampleBuffer:
                         raise asyncio.QueueFull()
                 else:
                     await self._notify_w.wait_for(can_write)
-            self._samples = np.concatenate((self._samples, samples))
+            start_ix = self._write_ix
+            end_ix = start_ix + sample_size
+            np.put(self._samples, range(start_ix, end_ix), samples, mode='wrap')
+            self._write_ix = end_ix % self.maxsize
+            self._num_buffered += sample_size
             self._notify_r.notify_all()
 
     async def put_nowait(self, samples: SamplesT):
@@ -373,8 +378,11 @@ class SampleBuffer:
                         raise asyncio.QueueEmpty()
                 else:
                     await self._notify_r.wait_for(has_enough_samples)
-            samples = self._samples[:count]
-            self._samples = self._samples[count:]
+            start_ix = self._read_ix
+            end_ix = start_ix + count
+            samples = np.take(self._samples, range(start_ix, end_ix), mode='wrap')
+            self._read_ix = end_ix % self.maxsize
+            self._num_buffered -= count
             self._notify_w.notify_all()
             return samples
 
@@ -395,7 +403,7 @@ class SampleBuffer:
         return False
 
     def __len__(self) -> int:
-        return self._samples.size
+        return self._num_buffered
 
 
 
@@ -477,6 +485,39 @@ async def run_main(chunk_size: int):
             samples = await buffer.get(processor.num_samples_to_process)
             await asyncio.to_thread(processor.process, samples)
 
+async def test_buffer():
+    write_chunk = 1024
+    read_chunk = 2048
+    N = read_chunk * 4
+    maxsize = read_chunk * 2
+    src = np.zeros(N, dtype=np.complex128)
+    src.real = np.arange(N)
+    src.imag = np.arange(N)
+    src = np.reshape(src, (N // write_chunk, write_chunk))
+    dst = np.zeros((N // read_chunk, read_chunk), dtype=np.complex128)
+
+    print(f'{N=}, {maxsize=}, {src.shape=}, {dst.shape=}')
+    assert src.size == dst.size == N
+    buffer = SampleBuffer(maxsize=maxsize)
+
+    async def fill_buffer():
+        for i in range(src.shape[0]):
+            print(f'put: {i}, {len(buffer)=}, {buffer._read_ix=}, {buffer._write_ix=}')
+            await buffer.put(src[i])
+
+    t = asyncio.create_task(fill_buffer())
+
+    for i in range(dst.shape[0]):
+        print(f'get: {i}, {len(buffer)=}, {buffer._read_ix=}, {buffer._write_ix=}')
+        dst[i] = await buffer.get(read_chunk)
+
+    await t
+    src = src.flatten()
+    dst = dst.flatten()
+
+    assert np.array_equal(src, dst)
+
 
 if __name__ == '__main__':
+    # asyncio.run(test_buffer())
     main()
