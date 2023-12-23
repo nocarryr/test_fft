@@ -6,9 +6,9 @@ import numpy as np
 import numpy.typing as npt
 from scipy import signal
 
-from common import SamplesT, FloatArray, ProcessConfig
+from kiwitracker.common import SamplesT, FloatArray, ProcessConfig
 if TYPE_CHECKING:
-    from sample_reader import SampleBuffer
+    from kiwitracker.sample_reader import SampleBuffer
 
 
 class SampleProcessor:

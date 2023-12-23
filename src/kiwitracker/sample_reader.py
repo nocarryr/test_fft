@@ -9,8 +9,8 @@ import rtlsdr
 RtlSdr: TypeAlias = rtlsdr.rtlsdraio.RtlSdrAio
 
 
-from common import SamplesT, SampleConfig, ProcessConfig
-from sample_processor import SampleProcessor
+from kiwitracker.common import SamplesT, SampleConfig, ProcessConfig
+from kiwitracker.sample_processor import SampleProcessor
 
 
 class SampleReader:
